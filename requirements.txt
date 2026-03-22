@@ -4,3 +4,4 @@ opencv-python-headless
 numpy
 ultralytics==8.0.144
 onnxruntime
+gdown
