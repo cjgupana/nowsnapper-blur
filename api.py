@@ -84,8 +84,16 @@ async def anonymize_image(request: Request):
                 
                 if x1 < x2 and y1 < y2:
                     roi = img[y1:y2, x1:x2]
-                    blurred_roi = cv2.GaussianBlur(roi, (99, 99), 30)
-                    img[y1:y2, x1:x2] = blurred_roi
+                    
+                    # SUPER CENSOR: Pixelate the face/plate heavily to destroy details
+                    h_roi, w_roi = roi.shape[:2]
+                    if h_roi > 0 and w_roi > 0:
+                        small = cv2.resize(roi, (8, 8), interpolation=cv2.INTER_LINEAR)
+                        pixelated = cv2.resize(small, (w_roi, h_roi), interpolation=cv2.INTER_NEAREST)
+                        
+                        # Add a slight blur to smooth the harsh pixel blocks
+                        blurred_roi = cv2.GaussianBlur(pixelated, (15, 15), 10)
+                        img[y1:y2, x1:x2] = blurred_roi
 
         # 5. Clean up memory
         del preds, outputs, blob
