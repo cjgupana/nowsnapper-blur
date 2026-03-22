@@ -1,18 +1,25 @@
 import os
-os.environ["YOLO_VERBOSE"] = "False" 
-os.environ["ULTRALYTICS_ENV"] = "production"
 os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MALLOC_TRIM_THRESHOLD_"] = "100000"
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 import cv2
 import numpy as np
-from ultralytics import YOLO
+import onnxruntime as ort
 import gc
 import traceback
 
 app = FastAPI()
-model = None
+
+print("Loading raw ONNX engine (Zero PyTorch Bloat)...")
+# Lock down the RAM and CPU threads for the Free Tier
+session_options = ort.SessionOptions()
+session_options.intra_op_num_threads = 1
+session_options.inter_op_num_threads = 1
+session = ort.InferenceSession("best.onnx", sess_options=session_options)
+input_name = session.get_inputs()[0].name
+print("Engine loaded successfully!")
 
 @app.get("/")
 def health_check():
@@ -20,15 +27,7 @@ def health_check():
 
 @app.post("/anonymize")
 async def anonymize_image(request: Request):
-    global model
     try:
-        if model is None:
-            if not os.path.exists("best.onnx"):
-                return Response(status_code=500, content="Error: best.onnx is missing from the server!")
-            print("Loading ONNX model into memory...")
-            model = YOLO("best.onnx", task='detect')
-            print("Model loaded successfully!")
-
         gc.collect() 
         
         contents = await request.body()
@@ -41,27 +40,55 @@ async def anonymize_image(request: Request):
         if img is None:
             return Response(status_code=400, content="Invalid image format")
 
-        # Run ONNX inference
-        results = model(img, conf=0.4, imgsz=320)
-
-        for result in results:
-            boxes = result.boxes.xyxy
-            if hasattr(boxes, 'cpu'):
-                boxes = boxes.cpu().numpy()
-            else:
-                boxes = np.array(boxes)
+        img_h, img_w = img.shape[:2]
+        
+        # 1. Pure Math Pre-processing
+        blob = cv2.dnn.blobFromImage(img, 1/255.0, (320, 320), swapRB=True, crop=False)
+        
+        # 2. Raw ONNX Inference (Uses <50MB RAM!)
+        outputs = session.run(None, {input_name: blob})
+        preds = outputs[0][0].T 
+        
+        # 3. Pure Math Post-Processing (Finding the faces/plates)
+        x_factor = img_w / 320.0
+        y_factor = img_h / 320.0
+        
+        boxes = []
+        confidences =[]
+        
+        for row in preds:
+            scores = row[4:]
+            max_score = np.max(scores)
+            
+            if max_score > 0.4:
+                x_c, y_c, w, h = row[0:4]
                 
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box)
-                y1, y2 = max(0, y1), min(img.shape[0], y2)
-                x1, x2 = max(0, x1), min(img.shape[1], x2)
+                left = int((x_c - w / 2) * x_factor)
+                top = int((y_c - h / 2) * y_factor)
+                width = int(w * x_factor)
+                height = int(h * y_factor)
+                
+                boxes.append([left, top, width, height])
+                confidences.append(float(max_score))
+                
+        # 4. Filter overlapping boxes and Apply Blur
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.4, 0.4)
+        
+        if len(indices) > 0:
+            for i in indices.flatten():
+                x, y, w, h = boxes[i]
+                x1 = max(0, x)
+                y1 = max(0, y)
+                x2 = min(img_w, x + w)
+                y2 = min(img_h, y + h)
                 
                 if x1 < x2 and y1 < y2:
                     roi = img[y1:y2, x1:x2]
                     blurred_roi = cv2.GaussianBlur(roi, (99, 99), 30)
                     img[y1:y2, x1:x2] = blurred_roi
 
-        del results
+        # 5. Clean up memory
+        del preds, outputs, blob
         gc.collect()
 
         _, encoded_img = cv2.imencode('.jpg', img)
@@ -75,12 +102,7 @@ async def anonymize_image(request: Request):
         print(error_msg)
         return Response(status_code=500, content=f"Python Error: {str(e)}")
 
-# ==========================================
-# THE FIX: BIND TO RENDER's SPECIFIC PORT
-# ==========================================
 if __name__ == "__main__":
     import uvicorn
-    # Grab the port Render wants us to use (defaults to 10000)
     port = int(os.environ.get("PORT", 10000))
-    # 0.0.0.0 tells the app to accept external internet connections
     uvicorn.run(app, host="0.0.0.0", port=port)
