@@ -5,3 +5,5 @@ numpy
 ultralytics==8.0.144
 gdown
 setuptools
+torch==2.0.1
+torchvision==0.15.2
