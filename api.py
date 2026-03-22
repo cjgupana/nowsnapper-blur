@@ -1,45 +1,21 @@
-import os
-# ==========================================
-# 1. LINUX MEMORY HACKS (MUST BE AT THE VERY TOP)
-# Prevents the server from hoarding RAM
-# ==========================================
-os.environ["MALLOC_ARENA_MAX"] = "2"
-os.environ["OMP_NUM_THREADS"] = "1"
-
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 import cv2
 import numpy as np
-import gdown
-import traceback
-import gc
-import torch
 from ultralytics import YOLO
+import gc
+import traceback
 
-# ==========================================
-# 2. KILL PYTORCH MEMORY TRACKING
-# ==========================================
-torch.set_grad_enabled(False)
-torch.set_num_threads(1)
-
-original_load = torch.load
-def custom_load(*args, **kwargs):
-    kwargs['weights_only'] = False
-    return original_load(*args, **kwargs)
-torch.load = custom_load
-
-model_file = "best.pt"
-if not os.path.exists(model_file):
-    print("Downloading model...")
-    gdown.download(id="1uV8IMuGDbmDabdjyeSy4SUKV9OS-ULbe", output=model_file, quiet=False)
+# Load the ultra-lightweight ONNX model directly from the GitHub folder
+model = YOLO("best.onnx", task='detect') 
 
 app = FastAPI()
-model = YOLO(model_file, task='detect')
 
 @app.post("/anonymize")
 async def anonymize_image(request: Request):
     try:
         gc.collect() 
+        
         contents = await request.body()
         nparr = np.frombuffer(contents, np.uint8)
         del contents 
@@ -50,15 +26,9 @@ async def anonymize_image(request: Request):
         if img is None:
             return Response(status_code=400, content="Invalid image format")
 
-        # ==========================================
-        # 3. WITH TORCH.NO_GRAD()
-        # This is the magic lock that stops PyTorch 
-        # from allocating hundreds of MBs of RAM!
-        # ==========================================
-        with torch.no_grad():
-            results = model(img, conf=0.4, device='cpu', imgsz=320)
+        # Run ONNX inference (uses almost zero RAM!)
+        results = model(img, conf=0.4, imgsz=320)
 
-        # Apply Blur
         for result in results:
             boxes = result.boxes.xyxy.cpu().numpy()
             for box in boxes:
