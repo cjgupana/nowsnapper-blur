@@ -5,20 +5,9 @@ import numpy as np
 from ultralytics import YOLO
 import gc
 import traceback
-import os
-import gdown
 
-# 1. Download the ONNX model from Google Drive
-model_file = "best.onnx"
-if not os.path.exists(model_file):
-    print("Downloading ONNX model from Google Drive...")
-    # ==========================================
-    # PASTE YOUR NEW GOOGLE DRIVE ID HERE:
-    # ==========================================
-    gdown.download(id="1f2zrlb9r1vqO5aX8rYCjQxF78-MT2R1k", output=model_file, quiet=False)
-
-# 2. Load the ultra-lightweight ONNX model
-model = YOLO(model_file, task='detect') 
+# Load the ultra-lightweight ONNX model natively (it will already be on the hard drive!)
+model = YOLO("best.onnx", task='detect') 
 
 app = FastAPI()
 
@@ -41,7 +30,7 @@ async def anonymize_image(request: Request):
         results = model(img, conf=0.4, imgsz=320)
 
         for result in results:
-            # Safely extract boxes whether it's a tensor or numpy array
+            # Safely extract boxes
             boxes = result.boxes.xyxy
             if hasattr(boxes, 'cpu'):
                 boxes = boxes.cpu().numpy()
