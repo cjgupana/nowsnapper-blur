@@ -1,15 +1,7 @@
 import os
-# ==========================================
-# 1. KILL TELEMETRY & THREAD HOARDING
-# Stops the app from hanging during boot!
-# ==========================================
 os.environ["YOLO_VERBOSE"] = "False" 
 os.environ["ULTRALYTICS_ENV"] = "production"
 os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
@@ -20,33 +12,19 @@ import gc
 import traceback
 
 app = FastAPI()
-
-# We will "Lazy Load" the model so the server boots instantly
 model = None
 
-# ==========================================
-# NEW: INSTANT HEALTH CHECK ROUTE
-# ==========================================
 @app.get("/")
 def health_check():
-    return {"status": "The Python server is fully awake and responding!"}
+    return {"status": "The Python server is fully awake and listening on the correct port!"}
 
 @app.post("/anonymize")
 async def anonymize_image(request: Request):
     global model
     try:
-        # ==========================================
-        # 2. LAZY LOAD & CORRUPTION CHECK
-        # Only loads the AI when a photo arrives!
-        # ==========================================
         if model is None:
             if not os.path.exists("best.onnx"):
                 return Response(status_code=500, content="Error: best.onnx is missing from the server!")
-            
-            # Check if Google Drive gave us a fake HTML page instead of the 30MB model
-            if os.path.getsize("best.onnx") < 100000: 
-                return Response(status_code=500, content="Error: best.onnx is corrupted! (File is too small). Google Drive likely blocked the download.")
-            
             print("Loading ONNX model into memory...")
             model = YOLO("best.onnx", task='detect')
             print("Model loaded successfully!")
@@ -96,3 +74,13 @@ async def anonymize_image(request: Request):
         error_msg = traceback.format_exc()
         print(error_msg)
         return Response(status_code=500, content=f"Python Error: {str(e)}")
+
+# ==========================================
+# THE FIX: BIND TO RENDER's SPECIFIC PORT
+# ==========================================
+if __name__ == "__main__":
+    import uvicorn
+    # Grab the port Render wants us to use (defaults to 10000)
+    port = int(os.environ.get("PORT", 10000))
+    # 0.0.0.0 tells the app to accept external internet connections
+    uvicorn.run(app, host="0.0.0.0", port=port)
