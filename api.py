@@ -43,24 +43,26 @@ async def anonymize_image(request: Request):
         img_h, img_w = img.shape[:2]
         
         # 1. Pure Math Pre-processing
-        blob = cv2.dnn.blobFromImage(img, 1/255.0, (320, 320), swapRB=True, crop=False)
+        # INCREASED to 640x640 to preserve background details (faces/farther plates)
+        blob = cv2.dnn.blobFromImage(img, 1/255.0, (640, 640), swapRB=True, crop=False)
         
         # 2. Raw ONNX Inference (Uses <50MB RAM!)
         outputs = session.run(None, {input_name: blob})
         preds = outputs[0][0].T 
         
         # 3. Pure Math Post-Processing (Finding the faces/plates)
-        x_factor = img_w / 320.0
-        y_factor = img_h / 320.0
+        x_factor = img_w / 640.0
+        y_factor = img_h / 640.0
         
-        boxes = []
+        boxes =[]
         confidences =[]
         
         for row in preds:
             scores = row[4:]
             max_score = np.max(scores)
             
-            if max_score > 0.4:
+            # LOWERED confidence to 20% to catch smaller objects in the background
+            if max_score > 0.20:
                 x_c, y_c, w, h = row[0:4]
                 
                 left = int((x_c - w / 2) * x_factor)
@@ -72,7 +74,8 @@ async def anonymize_image(request: Request):
                 confidences.append(float(max_score))
                 
         # 4. Filter overlapping boxes and Apply Blur
-        indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.4, 0.4)
+        # LOWERED threshold to match the new 0.20 confidence
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.20, 0.4)
         
         if len(indices) > 0:
             for i in indices.flatten():
